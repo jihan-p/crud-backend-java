@@ -12,7 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import jakarta.persistence.EntityNotFoundException;
 
 @Service // Menandakan bahwa ini adalah Service Layer
-public class UserService {
+public class UserService implements org.springframework.security.core.userdetails.UserDetailsService {
 
     // Spring akan meng-inject (dependency injection) Repository secara otomatis
     private final UserRepository userRepository;
@@ -79,7 +79,8 @@ public class UserService {
         PageRequest pageRequest = PageRequest.of(page, size);
 
         if (search != null && !search.trim().isEmpty()) {
-            return userRepository.findByEmailContainingIgnoreCaseOrNameContainingIgnoreCase(search, search, pageRequest);
+            return userRepository.findByEmailContainingIgnoreCaseOrNameContainingIgnoreCase(search, search,
+                    pageRequest);
         }
 
         return userRepository.findAll(pageRequest);
@@ -103,5 +104,70 @@ public class UserService {
     @Transactional
     public void deleteUser(Long id) {
         userRepository.deleteById(id);
+    }
+
+    @Override
+    public org.springframework.security.core.userdetails.UserDetails loadUserByUsername(String email)
+            throws org.springframework.security.core.userdetails.UsernameNotFoundException {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new org.springframework.security.core.userdetails.UsernameNotFoundException(
+                        "User not found with email: " + email));
+
+        return org.springframework.security.core.userdetails.User.builder()
+                .username(user.getEmail())
+                .password(user.getPasswordHash())
+                .roles(user.getRole().toUpperCase())
+                .build();
+    }
+
+    // Activation
+    public void activateUser(String email, String token) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new EntityNotFoundException("User not found"));
+
+        if (user.getIsActive()) {
+            throw new IllegalStateException("User already active");
+        }
+
+        if (user.getActivationToken() == null || !user.getActivationToken().equals(token)) {
+            throw new IllegalArgumentException("Invalid activation token");
+        }
+
+        user.setIsActive(true);
+        user.setActivationToken(null);
+        userRepository.save(user);
+    }
+
+    // Request Reset
+    public void requestPasswordReset(String email) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new EntityNotFoundException("User not found"));
+
+        String token = java.util.UUID.randomUUID().toString();
+        user.setResetToken(token);
+        user.setResetTokenExpiry(java.time.LocalDateTime.now().plusHours(1));
+        userRepository.save(user);
+
+        // Log token for now
+        System.out.println("Reset Token for " + email + ": " + token);
+    }
+
+    // Reset Password
+    public void resetPassword(String email, String token, String newPassword) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new EntityNotFoundException("User not found"));
+
+        if (user.getResetToken() == null || !user.getResetToken().equals(token)) {
+            throw new IllegalArgumentException("Invalid reset token");
+        }
+
+        if (user.getResetTokenExpiry().isBefore(java.time.LocalDateTime.now())) {
+            throw new IllegalArgumentException("Reset token expired");
+        }
+
+        user.setPasswordHash(passwordEncoder.encode(newPassword));
+        user.setResetToken(null);
+        user.setResetTokenExpiry(null);
+        userRepository.save(user);
     }
 }
